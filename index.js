@@ -14,7 +14,7 @@ const POLLING_INTERVAL = 20000; // 20 ثانية
 let lastMap = null; 
 let lastServerFullStatus = false; 
 let lastPlayersHash = ''; 
-let lastMessageId = null; 
+let lastMessageId = null; // سنستخدم هذا لتعديل الرسالة بدلاً من حذفها
 
 // --- 3. دالة بناء حمولة الرسالة (Embed) ---
 function createStatusPayload(state, isOffline = false) {
@@ -34,7 +34,6 @@ function createStatusPayload(state, isOffline = false) {
         ],
         timestamp: new Date().toISOString(),
         footer: {
-            // ✅ تم التعديل هنا
             text: 'System Powered by GlaD | Last Update' 
         }
     };
@@ -44,29 +43,32 @@ function createStatusPayload(state, isOffline = false) {
     };
 }
 
-// --- 4. دالة الحذف والإرسال ---
+// --- 4. دالة الإرسال الذكي (Edit instead of Delete/Post) ---
 async function sendUpdate(payload) {
-    // 4.1 حذف الرسالة القديمة
+    // الخيار أ: إذا كان لدينا ID رسالة سابقة، نحاول تعديلها (PATCH)
     if (lastMessageId) {
         try {
-            const deleteUrl = `${WEBHOOK_URL}/messages/${lastMessageId}`;
-            await axios.delete(deleteUrl);
-            console.log(`Successfully deleted previous message: ${lastMessageId}`);
+            // Webhook Edit Endpoint: [WEBHOOK_URL]/messages/[MESSAGE_ID]
+            const editUrl = `${WEBHOOK_URL}/messages/${lastMessageId}`;
+            await axios.patch(editUrl, payload);
+            console.log(`Successfully edited message: ${lastMessageId}`);
+            return; // نخرج من الدالة لأننا انتهينا
         } catch (error) {
-            console.error('Could not delete previous message:', error.response ? error.response.status : error.message);
+            console.error('Failed to edit message (maybe deleted?). Sending a new one...');
+            // إذا فشل التعديل (مثلاً الرسالة حذفت)، نجعل الـ ID فارغاً لنرسل واحدة جديدة
+            lastMessageId = null;
         }
     }
-    lastMessageId = null;
     
-    // 4.2 إرسال الرسالة الجديدة
+    // الخيار ب: إرسال رسالة جديدة (POST) - يحدث في أول مرة أو عند الخطأ
     try {
         const response = await axios.post(WEBHOOK_URL, payload);
+        
         if (response.data && response.data.id) {
             lastMessageId = response.data.id; 
             console.log(`Successfully sent new message. ID: ${lastMessageId}`);
         } else {
              console.error("Sent message, but failed to retrieve message ID.");
-             lastMessageId = null; 
         }
     } catch (error) {
         console.error('Failed to send Webhook message:', error.message);
@@ -107,10 +109,12 @@ async function updateServerStatus() {
         lastServerFullStatus = isCurrentlyFull;
         lastPlayersHash = playersHash;
     } else {
-        shouldUpdate = true;
+        // إذا تغيرت الحالة من Online إلى Offline (أو العكس) نحتاج للتحديث
+        shouldUpdate = true; 
     }
 
-    if (!shouldUpdate) {
+    // ملاحظة: إذا كانت الرسالة غير موجودة (بداية التشغيل)، يجب أن نرسل حتى لو لم تتغير الحالة
+    if (!shouldUpdate && lastMessageId) {
         console.log("No required state change. Skipping update.");
         return;
     }
@@ -121,7 +125,7 @@ async function updateServerStatus() {
 
 // --- 6. التشغيل ---
 function startMonitor() {
-    console.log('Starting System Powered by GlaD...');
+    console.log('Starting System Powered by GlaD (Edit Mode)...');
     updateServerStatus(); 
     setInterval(updateServerStatus, POLLING_INTERVAL); 
 }
