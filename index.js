@@ -7,17 +7,17 @@ require('dotenv').config();
 const SERVER_IP = process.env.SERVER_IP;
 const SERVER_PORT = process.env.SERVER_PORT;
 const WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL; 
-const GAME_TYPE = 'cs16'; // يمكنك تغييرها إذا كانت اللعبة مختلفة
+const GAME_TYPE = 'cs16'; 
 
 // --- 2. متغيرات حالة التتبع (للتحديث المشروط) ---
 let lastMap = null; 
 let lastServerFullStatus = false; 
-let lastMessageId = null; // لحذف الرسالة القديمة عند إرسال الجديدة
+let lastMessageId = null; // لحفظ ID الرسالة المرسلة لحذفها لاحقاً
 
 // --- 3. دالة بناء حمولة الرسالة (Embed) ---
 function createStatusPayload(state, isOffline = false) {
-    // الألوان: أحمر (Offline)، أصفر (Passworded)، أخضر (Online)
-    const color = isOffline ? 16711680 : (state.raw.password ? 16753920 : 65280); 
+    // الألوان: أحمر (Offline)، أخضر (Online)
+    const color = isOffline ? 0xFF0000 : 0x00FF00; 
 
     const embed = {
         color: color,
@@ -52,33 +52,42 @@ function createStatusPayload(state, isOffline = false) {
     };
 }
 
-// --- 4. دالة الحذف والإرسال (التحديث) ---
+// --- 4. دالة الحذف والإرسال (التحديث) - الحل لمشكلة الحذف ---
 async function sendUpdate(payload) {
-    // 4.1 حذف الرسالة القديمة (إذا كان هناك ID محفوظ)
+    // 4.1 محاولة حذف الرسالة القديمة أولاً
     if (lastMessageId) {
         try {
+            // استخدام URL Webhook الكامل + ID الرسالة للحذف (يتطلب التوكن في الرابط)
             const deleteUrl = `${WEBHOOK_URL}/messages/${lastMessageId}`;
             await axios.delete(deleteUrl);
             console.log(`Successfully deleted previous message: ${lastMessageId}`);
         } catch (error) {
-            console.error('Could not delete previous message. Error:', error.response ? error.response.status : error.message);
-            // نستمر في الإرسال حتى لو فشل الحذف
+            // تسجيل الخطأ ولكن عدم التوقف (لأن الرسالة قد تكون حذفت يدوياً)
+            console.error('Could not delete previous message. Error status:', error.response ? error.response.status : error.message);
         }
-        lastMessageId = null; 
     }
-
+    
     // 4.2 إرسال الرسالة الجديدة
     try {
         const response = await axios.post(WEBHOOK_URL, payload);
-        lastMessageId = response.data.id; // حفظ ID الرسالة الجديدة
-        console.log(`Successfully sent new message. ID: ${lastMessageId}`);
+        
+        // التحقق من الاستجابة وحفظ ID الرسالة الجديدة
+        if (response.data && response.data.id) {
+            lastMessageId = response.data.id; // <--- حفظ الـ ID الجديد للعملية القادمة
+            console.log(`Successfully sent new message. ID: ${lastMessageId}`);
+        } else {
+             // فشل في الحصول على الـ ID (قد يحدث إذا كانت الاستجابة غير متوقعة)
+             console.error("Sent message, but failed to retrieve message ID for next deletion.");
+             lastMessageId = null; 
+        }
+
     } catch (error) {
-        console.error('Failed to send Webhook message. Error:', error.response ? error.response.data : error.message);
+        console.error('Failed to send Webhook message. Check your WEBHOOK_URL. Error:', error.response ? error.response.data : error.message);
     }
 }
 
 
-// --- 5. دالة مراقبة حالة السيرفر الرئيسية ---
+// --- 5. دالة مراقبة حالة السيرفر الرئيسية (منطق التحديث المشروط) ---
 async function updateServerStatus() {
     let currentState = null;
     let isOffline = false;
@@ -94,7 +103,7 @@ async function updateServerStatus() {
         isOffline = true;
     }
 
-    // 5.2 منطق التحديث المشروط (الخريطة أو الامتلاء)
+    // 5.2 منطق التحديث المشروط (تغير الخريطة أو حالة الامتلاء/عدم الامتلاء)
     if (!isOffline) {
         const currentMap = currentState.map;
         const currentPlayersCount = currentState.players.length;
@@ -128,8 +137,8 @@ function startMonitor() {
     // تشغيل التحديث الفوري عند البدء
     updateServerStatus(); 
     
-    // تشغيل التحديث الدوري كل 10 ثوانٍ (Pooling)
-    setInterval(updateServerStatus, 10000); 
+    // تشغيل التحديث الدوري كل 20 ثانية (لتقليل الضغط)
+    setInterval(updateServerStatus, 20000); 
 }
 
 startMonitor();
