@@ -1,120 +1,146 @@
-// index.js (النسخة النهائية مع التعديل)
-const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
+// index.js
 const Gamedig = require('gamedig');
+const axios = require('axios');
 require('dotenv').config();
 
-// --- 1. إعدادات البوت والخدمة ---
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const CHANNEL_ID = process.env.CHANNEL_ID; 
+// --- 1. المتغيرات الأساسية ---
 const SERVER_IP = process.env.SERVER_IP;
 const SERVER_PORT = process.env.SERVER_PORT;
+const WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL; 
 const GAME_TYPE = 'cs16'; 
 const POLLING_INTERVAL = 20000; // 20 ثانية
 
-// --- 2. متغيرات الحالة والتتبع ---
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
-
-let monitorMessage = null; // لتخزين كائن الرسالة التي سيتم تعديلها
+// --- 2. متغيرات حالة التتبع (للتحديث المشروط) ---
 let lastMap = null; 
 let lastServerFullStatus = false; 
-let lastPlayersHash = ''; // لتتبع قائمة اللاعبين (للتحديث الاحترافي)
+let lastPlayersHash = ''; // لحفظ قيمة Hash لقائمة اللاعبين
+let lastMessageId = null; // لحفظ ID الرسالة المرسلة لحذفها لاحقاً
 
 
-// --- 3. دالة بناء رسالة Embed (تبقى كما هي تقريباً) ---
-function createStatusEmbed(state, isOffline = false) {
-    // ... (نفس منطق بناء الـ Embed السابق) ...
-    // ... (تأكد من إضافة حقل Players وقائمة اللاعبين)
-    // ...
-    // (لتوفير المساحة، لن أدرج الكود الكامل هنا، لكنه يستخدم EmbedBuilder)
-    
-    // مثال بسيط للـ Embed
-    const embed = new EmbedBuilder()
-        .setColor(isOffline ? 0xFF0000 : 0x00FF00)
-        .setTitle(isOffline ? `🚨 Server Offline 🚨` : `🔥 ${state.name}`)
-        .setDescription(`**Connect:** steam://connect/${SERVER_IP}:${SERVER_PORT}`)
-        .addFields(
+// --- 3. دالة بناء حمولة الرسالة (Embed) ---
+function createStatusPayload(state, isOffline = false) {
+    const color = isOffline ? 0xFF0000 : 0x00FF00; 
+    const playerList = isOffline ? 'N/A' : (state.players.map(p => p.name || 'N/A').join('\n') || 'No players online.');
+
+    const embed = {
+        color: color,
+        title: isOffline ? `🚨 Server Offline 🚨` : `🔥 ${state.name}`,
+        description: `**Connect:** steam://connect/${SERVER_IP}:${SERVER_PORT}`,
+        fields: [
             { name: 'Status', value: isOffline ? '🔴 Offline' : '🟢 Online', inline: true },
+            { name: 'Address:Port', value: `${SERVER_IP}:${SERVER_PORT}`, inline: true },
             { name: 'Current Map', value: isOffline ? 'N/A' : state.map, inline: true },
             { name: 'Players', value: isOffline ? '0 / 0' : `${state.players.length} / ${state.maxplayers}`, inline: true },
-        )
-        .setTimestamp();
-        
-    return embed;
+            { name: 'Player List', value: playerList, inline: false }
+        ],
+        timestamp: new Date().toISOString(),
+        footer: {
+            text: 'System Powered by GlaD | Last Update'
+        }
+    };
+    
+    return {
+        embeds: [embed]
+    };
 }
 
-// --- 4. دالة مراقبة حالة السيرفر الرئيسية ---
+
+// --- 4. دالة الحذف والإرسال (التحديث) - الحل لمشكلة الحذف ---
+async function sendUpdate(payload) {
+    // 4.1 محاولة حذف الرسالة القديمة أولاً
+    if (lastMessageId) {
+        try {
+            const deleteUrl = `${WEBHOOK_URL}/messages/${lastMessageId}`;
+            await axios.delete(deleteUrl);
+            console.log(`Successfully deleted previous message: ${lastMessageId}`);
+        } catch (error) {
+            console.error('Could not delete previous message. Error status:', error.response ? error.response.status : error.message);
+        }
+        lastMessageId = null; // يجب تعيينه لـ null بعد المحاولة
+    }
+    
+    // 4.2 إرسال الرسالة الجديدة
+    try {
+        const response = await axios.post(WEBHOOK_URL, payload);
+        
+        // التحقق من الاستجابة وحفظ ID الرسالة الجديدة
+        if (response.data && response.data.id) {
+            lastMessageId = response.data.id; 
+            console.log(`Successfully sent new message. ID: ${lastMessageId}`);
+        } else {
+             // فشل في الحصول على الـ ID (يجب الانتباه لهذا الخطأ في سجل Render)
+             console.error("Sent message, but failed to retrieve message ID for next deletion.");
+             lastMessageId = null; 
+        }
+
+    } catch (error) {
+        console.error('Failed to send Webhook message. Check your WEBHOOK_URL. Error:', error.response ? error.response.data : error.message);
+    }
+}
+
+
+// --- 5. دالة مراقبة حالة السيرفر الرئيسية (منطق التحديث المشروط) ---
 async function updateServerStatus() {
     let currentState = null;
     let isOffline = false;
 
+    // 5.1 الاستعلام عن السيرفر
     try {
-        currentState = await Gamedig.query({ type: GAME_TYPE, host: SERVER_IP, port: SERVER_PORT });
+        currentState = await Gamedig.query({
+            type: GAME_TYPE,
+            host: SERVER_IP,
+            port: SERVER_PORT
+        });
     } catch (error) {
         isOffline = true;
     }
-    
-    // 4.1 منطق التحديث المشروط
+
+    // 5.2 منطق التحديث المشروط (تغير الخريطة، الامتلاء، أو قائمة اللاعبين)
     let shouldUpdate = false;
+    
     if (!isOffline) {
         const currentMap = currentState.map;
         const maxPlayers = currentState.maxplayers;
         const isCurrentlyFull = (currentState.players.length >= maxPlayers);
         
-        // إنشاء قيمة Hash لقائمة اللاعبين (لتتبع التغييرات الصغيرة)
+        // Hash قائمة اللاعبين لتحديد ما إذا كان لاعب قد دخل أو خرج
         const playersHash = currentState.players.map(p => p.name).sort().join('|');
 
         // شروط التحديث:
         const mapChanged = currentMap !== lastMap;
         const fullStatusChanged = lastServerFullStatus !== isCurrentlyFull;
-        const playerListChanged = playersHash !== lastPlayersHash;
+        const playerListChanged = playersHash !== lastPlayersHash; // تحديث عند دخول أو خروج لاعب
 
         shouldUpdate = mapChanged || fullStatusChanged || playerListChanged;
 
-        // تحديث المتغيرات للحالة الجديدة
+        // تحديث متغيرات حالة التتبع
         lastMap = currentMap;
         lastServerFullStatus = isCurrentlyFull;
         lastPlayersHash = playersHash;
     } else {
-        // دائماً نحدث إذا كان السيرفر Offline
+        // إذا كان Offline، دائماً نحدث لتسجيل حالة الانقطاع
         shouldUpdate = true;
     }
 
-    if (!shouldUpdate && monitorMessage) {
-        console.log("No state change. Skipping edit.");
+    if (!shouldUpdate) {
+        console.log("No required state change. Skipping update.");
         return;
     }
     
-    // 4.2 بناء الـ Embed
-    const statusEmbed = createStatusEmbed(currentState, isOffline);
-
-    // 4.3 إرسال/تعديل الرسالة
-    try {
-        const channel = await client.channels.fetch(CHANNEL_ID);
-        
-        if (monitorMessage) {
-            // التعديل المباشر على الرسالة (الرسالة المتجددة)
-            await monitorMessage.edit({ embeds: [statusEmbed] });
-            console.log('Message edited successfully.');
-        } else {
-            // إذا كانت أول مرة، أرسل رسالة جديدة واحفظ كائنها
-            monitorMessage = await channel.send({ embeds: [statusEmbed] });
-            console.log('Message sent for the first time and stored.');
-        }
-
-    } catch (error) {
-        console.error('Error sending/editing message:', error.message);
-    }
+    // 5.3 بناء وإرسال التحديث
+    const payload = createStatusPayload(currentState, isOffline);
+    await sendUpdate(payload);
 }
 
-// --- 5. تشغيل البوت والجدولة ---
-client.on('ready', () => {
-    console.log(`Logged in as ${client.user.tag}!`);
+// --- 6. دالة البدء ---
+function startMonitor() {
+    console.log('Starting game server monitor...');
     
-    // تشغيل التحديث الفوري عند التشغيل
+    // تشغيل التحديث الفوري عند البدء
     updateServerStatus(); 
     
-    // جدولة التحديث الدوري
-    setInterval(updateServerStatus, POLLING_INTERVAL);
-});
+    // تشغيل التحديث الدوري
+    setInterval(updateServerStatus, POLLING_INTERVAL); 
+}
 
-client.login(BOT_TOKEN);
+startMonitor();
