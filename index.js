@@ -10,11 +10,11 @@ const WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 const GAME_TYPE = 'cs16'; 
 const POLLING_INTERVAL = 20000; // 20 ثانية
 
-// --- 2. متغيرات حالة التتبع (للتحديث المشروط) ---
+// --- 2. متغيرات حالة التتبع ---
 let lastMap = null; 
 let lastServerFullStatus = false; 
-let lastPlayersHash = ''; // لتتبع قائمة اللاعبين
-let lastMessageId = null; // لحفظ ID الرسالة المرسلة لحذفها لاحقاً
+let lastPlayersHash = ''; 
+let lastMessageId = null; 
 
 // --- 3. دالة بناء حمولة الرسالة (Embed) ---
 function createStatusPayload(state, isOffline = false) {
@@ -34,7 +34,8 @@ function createStatusPayload(state, isOffline = false) {
         ],
         timestamp: new Date().toISOString(),
         footer: {
-            text: 'Game Server Monitor | Last Update'
+            // ✅ تم التعديل هنا
+            text: 'System Powered by GlaD | Last Update' 
         }
     };
     
@@ -43,18 +44,16 @@ function createStatusPayload(state, isOffline = false) {
     };
 }
 
-// --- 4. دالة الحذف والإرسال (التحديث) - الحل لمشكلة الحذف ---
+// --- 4. دالة الحذف والإرسال ---
 async function sendUpdate(payload) {
-    // 4.1 محاولة حذف الرسالة القديمة أولاً
+    // 4.1 حذف الرسالة القديمة
     if (lastMessageId) {
         try {
-            // Webhook Delete Endpoint: [WEBHOOK_URL]/messages/[MESSAGE_ID]
             const deleteUrl = `${WEBHOOK_URL}/messages/${lastMessageId}`;
             await axios.delete(deleteUrl);
             console.log(`Successfully deleted previous message: ${lastMessageId}`);
         } catch (error) {
-            // تسجيل الخطأ ولكن عدم التوقف
-            console.error('Could not delete previous message. Error status:', error.response ? error.response.status : error.message);
+            console.error('Could not delete previous message:', error.response ? error.response.status : error.message);
         }
     }
     lastMessageId = null;
@@ -62,28 +61,24 @@ async function sendUpdate(payload) {
     // 4.2 إرسال الرسالة الجديدة
     try {
         const response = await axios.post(WEBHOOK_URL, payload);
-        
-        // التحقق من الاستجابة وحفظ ID الرسالة الجديدة
         if (response.data && response.data.id) {
             lastMessageId = response.data.id; 
             console.log(`Successfully sent new message. ID: ${lastMessageId}`);
         } else {
-             console.error("Sent message, but failed to retrieve message ID for next deletion.");
+             console.error("Sent message, but failed to retrieve message ID.");
              lastMessageId = null; 
         }
-
     } catch (error) {
-        console.error('Failed to send Webhook message. Check your WEBHOOK_URL. Error:', error.response ? error.response.data : error.message);
+        console.error('Failed to send Webhook message:', error.message);
     }
 }
 
 
-// --- 5. دالة مراقبة حالة السيرفر الرئيسية (منطق التحديث المشروط) ---
+// --- 5. دالة المراقبة والتحديث المشروط ---
 async function updateServerStatus() {
     let currentState = null;
     let isOffline = false;
 
-    // 5.1 الاستعلام عن السيرفر
     try {
         currentState = await Gamedig.query({
             type: GAME_TYPE,
@@ -100,23 +95,18 @@ async function updateServerStatus() {
         const currentMap = currentState.map;
         const maxPlayers = currentState.maxplayers;
         const isCurrentlyFull = (currentState.players.length >= maxPlayers);
-        
-        // Hash قائمة اللاعبين لتحديد ما إذا كان لاعب قد دخل أو خرج
         const playersHash = currentState.players.map(p => p.name).sort().join('|');
 
-        // شروط التحديث:
         const mapChanged = currentMap !== lastMap;
         const fullStatusChanged = lastServerFullStatus !== isCurrentlyFull;
-        const playerListChanged = playersHash !== lastPlayersHash; // تحديث عند دخول أو خروج لاعب
+        const playerListChanged = playersHash !== lastPlayersHash;
 
         shouldUpdate = mapChanged || fullStatusChanged || playerListChanged;
 
-        // تحديث متغيرات حالة التتبع
         lastMap = currentMap;
         lastServerFullStatus = isCurrentlyFull;
         lastPlayersHash = playersHash;
     } else {
-        // إذا كان Offline، دائماً نحدث لتسجيل حالة الانقطاع
         shouldUpdate = true;
     }
 
@@ -125,19 +115,14 @@ async function updateServerStatus() {
         return;
     }
     
-    // 5.3 بناء وإرسال التحديث
     const payload = createStatusPayload(currentState, isOffline);
     await sendUpdate(payload);
 }
 
-// --- 6. دالة البدء ---
+// --- 6. التشغيل ---
 function startMonitor() {
-    console.log('Starting game server monitor...');
-    
-    // تشغيل التحديث الفوري عند البدء
+    console.log('Starting System Powered by GlaD...');
     updateServerStatus(); 
-    
-    // تشغيل التحديث الدوري
     setInterval(updateServerStatus, POLLING_INTERVAL); 
 }
 
