@@ -13,9 +13,8 @@ const POLLING_INTERVAL = 20000; // 20 ثانية
 // --- 2. متغيرات حالة التتبع (للتحديث المشروط) ---
 let lastMap = null; 
 let lastServerFullStatus = false; 
-let lastPlayersHash = ''; // لحفظ قيمة Hash لقائمة اللاعبين
+let lastPlayersHash = ''; // لتتبع قائمة اللاعبين
 let lastMessageId = null; // لحفظ ID الرسالة المرسلة لحذفها لاحقاً
-
 
 // --- 3. دالة بناء حمولة الرسالة (Embed) ---
 function createStatusPayload(state, isOffline = false) {
@@ -35,7 +34,7 @@ function createStatusPayload(state, isOffline = false) {
         ],
         timestamp: new Date().toISOString(),
         footer: {
-            text: 'System Powered by GlaD | Last Update'
+            text: 'Game Server Monitor | Last Update'
         }
     };
     
@@ -44,20 +43,21 @@ function createStatusPayload(state, isOffline = false) {
     };
 }
 
-
 // --- 4. دالة الحذف والإرسال (التحديث) - الحل لمشكلة الحذف ---
 async function sendUpdate(payload) {
     // 4.1 محاولة حذف الرسالة القديمة أولاً
     if (lastMessageId) {
         try {
+            // Webhook Delete Endpoint: [WEBHOOK_URL]/messages/[MESSAGE_ID]
             const deleteUrl = `${WEBHOOK_URL}/messages/${lastMessageId}`;
             await axios.delete(deleteUrl);
             console.log(`Successfully deleted previous message: ${lastMessageId}`);
         } catch (error) {
+            // تسجيل الخطأ ولكن عدم التوقف
             console.error('Could not delete previous message. Error status:', error.response ? error.response.status : error.message);
         }
-        lastMessageId = null; // يجب تعيينه لـ null بعد المحاولة
     }
+    lastMessageId = null;
     
     // 4.2 إرسال الرسالة الجديدة
     try {
@@ -68,7 +68,6 @@ async function sendUpdate(payload) {
             lastMessageId = response.data.id; 
             console.log(`Successfully sent new message. ID: ${lastMessageId}`);
         } else {
-             // فشل في الحصول على الـ ID (يجب الانتباه لهذا الخطأ في سجل Render)
              console.error("Sent message, but failed to retrieve message ID for next deletion.");
              lastMessageId = null; 
         }
@@ -95,7 +94,6 @@ async function updateServerStatus() {
         isOffline = true;
     }
 
-    // 5.2 منطق التحديث المشروط (تغير الخريطة، الامتلاء، أو قائمة اللاعبين)
     let shouldUpdate = false;
     
     if (!isOffline) {
