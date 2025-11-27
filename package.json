@@ -1,0 +1,14 @@
+{
+  "name": "game-server-monitor",
+  "version": "1.0.0",
+  "description": "Discord monitor using Webhooks",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "gamedig": "^4.0.0",
+    "axios": "^1.6.8",
+    "dotenv": "^16.4.5"
+  }
+}
