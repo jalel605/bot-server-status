@@ -1,24 +1,31 @@
-// index.js
+// index.js (باستخدام discord.js و Bot Token)
 const Gamedig = require('gamedig');
-const axios = require('axios');
+const { Client, GatewayIntentBits } = require('discord.js');
 require('dotenv').config();
 
 // --- 1. المتغيرات الأساسية ---
 const SERVER_IP = process.env.SERVER_IP;
 const SERVER_PORT = process.env.SERVER_PORT;
-const WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL; 
+const BOT_TOKEN = process.env.BOT_TOKEN; // Bot Token
+const CHANNEL_ID = process.env.CHANNEL_ID; // ID القناة
 const GAME_TYPE = 'cs16'; 
-
-// ✅ التعديل هنا: التوقيت 20 ثانية لضمان التقاط التغييرات فوراً
-const POLLING_INTERVAL = 20000; 
+const POLLING_INTERVAL = 20000; // 20 ثانية
 
 // --- 2. متغيرات حالة التتبع ---
 let lastMap = null; 
 let lastServerFullStatus = false; 
-let lastPlayersHash = ''; // نحافظ عليه لتتبع الحالة ولكن لا نستخدمه للتحديث المشروط
-let lastMessageId = null; 
+let statusMessage = null; // الكائن الذي يحمل الرسالة لتعديلها مباشرة
 
-// --- 3. دالة بناء حمولة الرسالة (Embed) ---
+// --- 3. تهيئة عميل Discord ---
+const client = new Client({ 
+    intents: [
+        GatewayIntentBits.Guilds, 
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent
+    ] 
+});
+
+// --- 4. دالة بناء حمولة الرسالة (Embed) ---
 function createStatusPayload(state, isOffline = false) {
     const color = isOffline ? 0xFF0000 : 0x00FF00; 
     const playerList = isOffline ? 'N/A' : (state.players.map(p => p.name || 'N/A').join('\n') || 'No players online.');
@@ -45,43 +52,43 @@ function createStatusPayload(state, isOffline = false) {
     };
 }
 
-// --- 4. دالة الإرسال الذكي (Edit Mode) ---
-async function sendUpdate(payload) {
-    // الخيار أ: محاولة تعديل الرسالة الموجودة (PATCH)
-    if (lastMessageId) {
+// --- 5. دالة الإرسال/التعديل (باستخدام Bot Client) ---
+async function sendOrEditMessage(payload) {
+    const channel = client.channels.cache.get(CHANNEL_ID);
+    if (!channel) {
+        console.error(`Channel with ID ${CHANNEL_ID} not found or inaccessible.`);
+        return;
+    }
+    
+    // الخيار أ: محاولة تعديل الرسالة الموجودة
+    if (statusMessage) {
         try {
-            const editUrl = `${WEBHOOK_URL}/messages/${lastMessageId}`;
-            await axios.patch(editUrl, payload);
-            console.log(`Successfully edited message: ${lastMessageId}`);
+            await statusMessage.edit(payload);
+            console.log("Successfully edited the status message.");
             return;
         } catch (error) {
-            console.error('Failed to edit message (maybe it was deleted?). Sending a new one...');
-            lastMessageId = null;
+            // إذا فشل التعديل (مثلاً، حُذفت الرسالة)، نُصفر statusMessage وننتقل للإرسال
+            console.error("Failed to edit existing message. Sending new one...", error.message);
+            statusMessage = null;
         }
     }
     
-    // الخيار ب: إرسال رسالة جديدة (POST) - يحدث فقط في البداية أو عند الخطأ
+    // الخيار ب: إرسال رسالة جديدة
     try {
-        const response = await axios.post(WEBHOOK_URL, payload);
-        
-        if (response.data && response.data.id) {
-            lastMessageId = response.data.id; 
-            console.log(`Successfully sent new message. ID: ${lastMessageId}`);
-        } else {
-             console.error("Sent message, but failed to retrieve message ID.");
-        }
+        statusMessage = await channel.send(payload);
+        console.log(`Successfully sent new message. ID: ${statusMessage.id}`);
     } catch (error) {
-        console.error('Failed to send Webhook message:', error.message);
+        console.error("Failed to send new message. Check bot permissions.", error.message);
     }
 }
 
 
-// --- 5. دالة المراقبة الرئيسية (المنطق الصارم) ---
+// --- 6. دالة المراقبة الرئيسية (المنطق الصارم) ---
 async function updateServerStatus() {
     let currentState = null;
     let isOffline = false;
 
-    // محاولة الاتصال بالسيرفر
+    // 6.1 الاستعلام عن السيرفر
     try {
         currentState = await Gamedig.query({
             type: GAME_TYPE,
@@ -99,10 +106,7 @@ async function updateServerStatus() {
         const maxPlayers = currentState.maxplayers;
         const isCurrentlyFull = (currentState.players.length >= maxPlayers);
         
-        // Hash قائمة اللاعبين (نحتاجها فقط لتحديث المتغيرات الداخلية)
-        const playersHash = currentState.players.map(p => p.name).sort().join('|');
-
-        // ✅ الشروط الصارمة للتحديث
+        // الشروط الصارمة للتحديث
         const mapChanged = currentMap !== lastMap;
         const fullStatusChanged = lastServerFullStatus !== isCurrentlyFull;
 
@@ -112,38 +116,39 @@ async function updateServerStatus() {
         // تحديث متغيرات التتبع
         lastMap = currentMap;
         lastServerFullStatus = isCurrentlyFull;
-        lastPlayersHash = playersHash;
     } else {
         // إذا كان السيرفر Offline، يجب أن نحدث الرسالة إذا كانت آخر حالة له Online
         if (lastMap !== null) {
             shouldUpdate = true; 
-            // تحديث متغيرات التتبع إلى Null
             lastMap = null;
             lastServerFullStatus = false;
         }
     }
 
     // إرسال التحديث في حالتين:
-    // 1. إذا كان هناك تحديث مطلوب (تغير الخريطة أو الامتلاء).
-    // 2. إذا كانت هذه أول مرة للتشغيل (lastMessageId === null).
-    if (!shouldUpdate && lastMessageId) {
+    // 1. إذا كان هناك تحديث مطلوب.
+    // 2. إذا لم تكن هناك رسالة موجودة لتعديلها (أول مرة تشغيل).
+    if (!shouldUpdate && statusMessage) {
         console.log("No required state change. Skipping update.");
         return;
     }
     
     const payload = createStatusPayload(currentState, isOffline);
-    await sendUpdate(payload);
+    await sendOrEditMessage(payload);
 }
 
-// --- 6. التشغيل ---
-function startMonitor() {
-    console.log(`Starting System Powered by GlaD (Strict Edit Mode)...`);
+// --- 7. تشغيل البوت والجدولة ---
+client.on('ready', () => {
+    console.log(`Bot logged in as ${client.user.tag}!`);
+    console.log(`Starting monitoring for ${SERVER_IP}:${SERVER_PORT}`);
     
     // تشغيل التحديث الأول فوراً
     updateServerStatus(); 
     
     // جدولة الفحص كل 20 ثانية
     setInterval(updateServerStatus, POLLING_INTERVAL); 
-}
+});
 
-startMonitor();
+client.login(BOT_TOKEN).catch(err => {
+    console.error("Failed to log in to Discord. Check your BOT_TOKEN:", err.message);
+});
