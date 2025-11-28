@@ -8,7 +8,7 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const CHANNEL_ID = process.env.CHANNEL_ID;
 const SERVER_IP = process.env.SERVER_IP; 
 const SERVER_COUNTRY = process.env.SERVER_COUNTRY || 'Unknown'; 
-const SERVER_PORT = process.env.SERVER_PORT || 10000; // متغير بيئة جديد خاص بالمنفذ
+const SERVER_PORT = process.env.SERVER_PORT || 10000; 
 
 if (!BOT_TOKEN || !CHANNEL_ID || !SERVER_IP) {
     console.error("Missing environment variables (BOT_TOKEN, CHANNEL_ID, SERVER_IP)");
@@ -40,7 +40,6 @@ async function updateServerStatus() {
     console.log(`Checking server status for ${SERVER_IP}...`);
     try {
         const [ip, port] = SERVER_IP.split(':');
-        // تأكد من نوع اللعبة 'cs16'
         const state = await Gamedig.query({
             type: 'cs16', 
             host: ip,
@@ -63,9 +62,6 @@ async function updateServerStatus() {
                 { name: 'Players', value: `${state.players.length} / ${state.maxplayers} (${Math.round((state.players.length / state.maxplayers) * 100)}%)`, inline: false },
             )
             .setTimestamp()
-            // =========================================================
-            // ✅ الإضافة المطلوبة: Powered by GlaD
-            // =========================================================
             .setFooter({ text: `System Powered by GlaD | Last Update: ${new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', hour12: true })}` });
         
         const channel = client.channels.cache.get(CHANNEL_ID);
@@ -85,7 +81,6 @@ async function updateServerStatus() {
         }
 
     } catch (error) {
-        // حالة السيرفر متوقف أو غير قابل للوصول
         console.error(`Error querying server ${SERVER_IP}: ${error.message}`);
         
         const embed = new EmbedBuilder()
@@ -124,9 +119,6 @@ client.login(BOT_TOKEN).catch(err => {
     process.exit(1);
 });
 
-// =========================================================
-// 🌐 خادم HTTP يستخدم SERVER_PORT لمنع الإغلاق في Render
-// =========================================================
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('Bot is running and monitoring the server status.\n');
