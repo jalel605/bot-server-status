@@ -1,6 +1,6 @@
 // index.js (الكود الذي يجمع منطقك وحل استقرار Render)
 const Gamedig = require('gamedig');
-const { Client, GatewayIntentBits } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 const http = require('http'); // ⬅️ الإضافة الضرورية للاستقرار
 require('dotenv').config();
 
@@ -12,6 +12,13 @@ const CHANNEL_ID = process.env.CHANNEL_ID; // ID القناة
 const GAME_TYPE = 'cs16'; 
 const POLLING_INTERVAL = 20000; // 20 ثانية
 const RENDER_PORT = process.env.RENDER_PORT || 10000; // ⬅️ منفذ الاستقرار
+const SERVER_COUNTRY = process.env.SERVER_COUNTRY || 'Unknown'; // ⬅️ متغير الدولة للاستخدام
+
+// التحقق من المتغيرات الأساسية
+if (!BOT_TOKEN || !CHANNEL_ID || !SERVER_IP || !SERVER_PORT) {
+    console.error("Missing environment variables (BOT_TOKEN, CHANNEL_ID, SERVER_IP, SERVER_PORT)");
+    process.exit(1);
+}
 
 // --- 2. متغيرات حالة التتبع ---
 let lastMap = null; 
@@ -27,37 +34,46 @@ const client = new Client({
     ] 
 });
 
-// --- 4. دالة بناء حمولة الرسالة (Embed) ---
+// --- 4. دالة عرض العلم (مع إضافة ألمانيا) ---
+const getCountryFlag = (countryCode) => {
+    const flags = {
+        'RO': '🇷🇴 Romania',
+        'GR': '🇬🇷 Greece', 
+        'US': '🇺🇸 USA',
+        'GB': '🇬🇧 UK',
+        'DE': '🇩🇪 Germany' // ⬅️ تم إضافة ألمانيا
+    };
+    return flags[countryCode.toUpperCase()] || '🌍 Unknown Location';
+};
+
+// --- 5. دالة بناء حمولة الرسالة (Embed) ---
 function createStatusPayload(state, isOffline = false) {
-    // ... (منطق بناء الرسالة كما أرسلته)
     const color = isOffline ? 0xFF0000 : 0x00FF00; 
     const playerList = isOffline ? 'N/A' : (state.players.map(p => p.name || 'N/A').join('\n') || 'No players online.');
+    const countryInfo = getCountryFlag(SERVER_COUNTRY); // ⬅️ جلب معلومات الدولة
 
-    const embed = {
-        color: color,
-        title: isOffline ? `🚨 Server Offline 🚨` : `🔥 ${state.name}`,
-        description: `**Connect:** steam://connect/${SERVER_IP}:${SERVER_PORT}`,
-        fields: [
+    const embed = new EmbedBuilder() // ⬅️ تم استخدام EmbedBuilder بدلاً من كائن عادي لتوافق Discord.js v14+
+        .setColor(color)
+        .setTitle(isOffline ? `🚨 Server Offline 🚨` : `🔥 ${state.name}`)
+        .setDescription(`**Connect:** steam://connect/${SERVER_IP}:${SERVER_PORT}`)
+        .addFields(
             { name: 'Status', value: isOffline ? '🔴 Offline' : '🟢 Online', inline: true },
+            { name: 'Country', value: countryInfo, inline: true }, // ⬅️ عرض الدولة
             { name: 'Address:Port', value: `${SERVER_IP}:${SERVER_PORT}`, inline: true },
             { name: 'Current Map', value: isOffline ? 'N/A' : state.map, inline: true },
             { name: 'Players', value: isOffline ? '0 / 0' : `${state.players.length} / ${state.maxplayers}`, inline: true },
             { name: 'Player List', value: playerList, inline: false }
-        ],
-        timestamp: new Date().toISOString(),
-        footer: {
-            text: 'System Powered by GlaD | Last Update' 
-        }
-    };
+        )
+        .setTimestamp(new Date())
+        .setFooter({ text: 'System Powered by GlaD | Last Update' });
     
     return {
         embeds: [embed]
     };
 }
 
-// --- 5. دالة الإرسال/التعديل (باستخدام Bot Client) ---
+// --- 6. دالة الإرسال/التعديل (باستخدام Bot Client) ---
 async function sendOrEditMessage(payload) {
-    // ... (منطق الإرسال والتعديل)
     const channel = client.channels.cache.get(CHANNEL_ID);
     if (!channel) {
         console.error(`Channel with ID ${CHANNEL_ID} not found or inaccessible.`);
@@ -85,12 +101,12 @@ async function sendOrEditMessage(payload) {
 }
 
 
-// --- 6. دالة المراقبة الرئيسية (المنطق الصارم) ---
+// --- 7. دالة المراقبة الرئيسية (المنطق الصارم) ---
 async function updateServerStatus() {
-    // ... (منطق الاستعلام وتحديث الرسالة)
     let currentState = null;
     let isOffline = false;
 
+    // 7.1 الاستعلام عن السيرفر
     try {
         currentState = await Gamedig.query({
             type: GAME_TYPE,
@@ -134,7 +150,7 @@ async function updateServerStatus() {
     await sendOrEditMessage(payload);
 }
 
-// --- 7. تشغيل البوت والجدولة ---
+// --- 8. تشغيل البوت والجدولة ---
 client.on('ready', () => {
     console.log(`Bot logged in as ${client.user.tag}!`);
     console.log(`Starting monitoring for ${SERVER_IP}:${SERVER_PORT}`);
@@ -148,7 +164,7 @@ client.login(BOT_TOKEN).catch(err => {
 });
 
 // =========================================================
-// 7.5 خادم HTTP لمنع الإغلاق (ضروري لـ Render)
+// 8.5 خادم HTTP لمنع الإغلاق (ضروري لـ Render)
 // =========================================================
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
