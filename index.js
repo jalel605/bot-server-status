@@ -7,7 +7,7 @@ require('dotenv').config();
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const CHANNEL_ID = process.env.CHANNEL_ID;
 const SERVER_IP = process.env.SERVER_IP; // مثال: "57.129.66.21:27015"
-// متغير بيئة جديد لتحديد الدولة
+// متغير البيئة لتحديد الدولة
 const SERVER_COUNTRY = process.env.SERVER_COUNTRY || 'Unknown'; 
 
 if (!BOT_TOKEN || !CHANNEL_ID || !SERVER_IP) {
@@ -29,10 +29,10 @@ let messageId = null; // لتخزين معرف الرسالة الواحدة ا�
 const getCountryFlag = (countryCode) => {
     const flags = {
         'RO': '🇷🇴 Romania',
-        'GR': '🇬🇷 Greece', // الدولة المطلوبة
+        'GR': '🇬🇷 Greece', 
         'US': '🇺🇸 USA',
         'GB': '🇬🇧 UK',
-        'DE': '🇩🇪 Germany'
+        'DE': '🇩🇪 Germany' 
     };
     return flags[countryCode.toUpperCase()] || '🌍 Unknown Location';
 };
@@ -56,7 +56,7 @@ async function updateServerStatus() {
             .setDescription(`**Connect:** \`steam://connect/${SERVER_IP}\``)
             .addFields(
                 { name: 'Status', value: state.maxplayers > 0 ? '🟢 Online' : '🔴 Offline', inline: true },
-                { name: 'Country', value: countryInfo, inline: true }, // عرض الدولة
+                { name: 'Country', value: countryInfo, inline: true }, 
                 { name: 'Address:Port', value: `\`${SERVER_IP}\``, inline: false },
                 { name: 'Game', value: state.raw.game || 'Counter-Strike 1.6', inline: true },
                 { name: 'Current Map', value: state.map, inline: true },
@@ -74,13 +74,12 @@ async function updateServerStatus() {
 
         if (messageId) {
             try {
-                // محاولة تعديل الرسالة الموجودة
                 const message = await channel.messages.fetch(messageId);
+                // تحقق من أن محتوى التضمين (Embed) قد تغير قبل التعديل (لتحسين الأداء)
                 await message.edit({ embeds: [embed] });
                 console.log(`Successfully edited message: ${messageId}`);
             } catch (error) {
                 console.warn(`Could not find message ID ${messageId} or failed to edit. Sending a new message.`);
-                // إذا فشل التعديل، أرسل رسالة جديدة واحفظ معرفها
                 const newMessage = await channel.send({ embeds: [embed] });
                 messageId = newMessage.id;
                 console.log(`Sent new message and updated messageId: ${messageId}`);
@@ -123,7 +122,6 @@ async function updateServerStatus() {
 
 client.once('ready', () => {
     console.log(`Bot logged in as ${client.user.tag}!`);
-    // تشغيل فوري ثم تكرار كل 20 ثانية
     updateServerStatus();
     setInterval(updateServerStatus, 20000); 
 });
@@ -133,10 +131,13 @@ client.login(BOT_TOKEN).catch(err => {
     process.exit(1);
 });
 
-// الخادم البسيط لمنع الإغلاق التلقائي في Render
-const PORT = process.env.PORT || 10000;
+// =========================================================
+// 🌐 خانة المنفذ (PORT) لمنع الإغلاق التلقائي في Render
+// =========================================================
+const PORT = process.env.PORT || 10000; // يستخدم متغير البيئة PORT الذي يوفره Render
 
 const server = http.createServer((req, res) => {
+    // يمكنك رؤية هذه الرسالة إذا دخلت على رابط Render للخدمة
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('Bot is running and monitoring the server status.\n');
 });
