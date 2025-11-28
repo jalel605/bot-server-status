@@ -1,17 +1,22 @@
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 const Gamedig = require('gamedig');
-const http = require('http'); // مكتبة لإبقاء الخدمة تعمل في Render
+const http = require('http'); 
 require('dotenv').config();
 
-// Load environment variables
+// =========================================================
+// ✅ متغيرات Render (يجب ضبطها في لوحة التحكم)
+// =========================================================
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const CHANNEL_ID = process.env.CHANNEL_ID;
-const SERVER_IP = process.env.SERVER_IP; 
+const SERVER_IP = process.env.SERVER_IP; // ⬅️ الآن سيكون IP فقط: 57.129.61.75
+const GAME_QUERY_PORT = process.env.SERVER_PORT; // ⬅️ الآن سيكون المنفذ فقط: 27015
 const SERVER_COUNTRY = process.env.SERVER_COUNTRY || 'Unknown'; 
-const SERVER_PORT = process.env.SERVER_PORT || 10000; 
 
-if (!BOT_TOKEN || !CHANNEL_ID || !SERVER_IP) {
-    console.error("Missing environment variables (BOT_TOKEN, CHANNEL_ID, SERVER_IP)");
+// المنفذ الخاص بخادم Render لضمان الاستقرار (يجب أن يكون 10000)
+const RENDER_STABILITY_PORT = process.env.PORT || 10000; 
+
+if (!BOT_TOKEN || !CHANNEL_ID || !SERVER_IP || !GAME_QUERY_PORT) {
+    console.error("Missing environment variables (BOT_TOKEN, CHANNEL_ID, SERVER_IP, SERVER_PORT)");
     process.exit(1);
 }
 
@@ -37,26 +42,30 @@ const getCountryFlag = (countryCode) => {
 };
 
 async function updateServerStatus() {
-    console.log(`Checking server status for ${SERVER_IP}...`);
+    console.log(`Checking server status for ${SERVER_IP}:${GAME_QUERY_PORT}...`);
     try {
-        const [ip, port] = SERVER_IP.split(':');
+        
+        // =========================================================
+        // ✅ استخدام المتغيرات المنفصلة مباشرة للاستعلام
+        // =========================================================
         const state = await Gamedig.query({
             type: 'cs16', 
-            host: ip,
-            port: parseInt(port)
+            host: SERVER_IP, // IP فقط
+            port: parseInt(GAME_QUERY_PORT) // المنفذ فقط
         });
 
         const countryInfo = getCountryFlag(SERVER_COUNTRY);
+        const Full_IP_Port = `${SERVER_IP}:${GAME_QUERY_PORT}`;
 
         const embed = new EmbedBuilder()
             .setColor(state.maxplayers > state.players.length ? 0x00FF00 : 0xFF0000)
             .setTitle(state.name)
-            .setURL(`steam://connect/${SERVER_IP}`)
-            .setDescription(`**Connect:** \`steam://connect/${SERVER_IP}\``)
+            .setURL(`steam://connect/${Full_IP_Port}`)
+            .setDescription(`**Connect:** \`steam://connect/${Full_IP_Port}\``)
             .addFields(
                 { name: 'Status', value: state.maxplayers > 0 ? '🟢 Online' : '🔴 Offline', inline: true },
                 { name: 'Country', value: countryInfo, inline: true }, 
-                { name: 'Address:Port', value: `\`${SERVER_IP}\``, inline: false },
+                { name: 'Address:Port', value: `\`${Full_IP_Port}\``, inline: false },
                 { name: 'Game', value: state.raw.game || 'Counter-Strike 1.6', inline: true },
                 { name: 'Current Map', value: state.map, inline: true },
                 { name: 'Players', value: `${state.players.length} / ${state.maxplayers} (${Math.round((state.players.length / state.maxplayers) * 100)}%)`, inline: false },
@@ -81,12 +90,14 @@ async function updateServerStatus() {
         }
 
     } catch (error) {
-        console.error(`Error querying server ${SERVER_IP}: ${error.message}`);
+        // حالة السيرفر متوقف أو غير قابل للوصول
+        console.error(`Error querying server ${SERVER_IP}:${GAME_QUERY_PORT}: ${error.message}`);
         
+        const Full_IP_Port = `${SERVER_IP}:${GAME_QUERY_PORT}`;
         const embed = new EmbedBuilder()
             .setColor(0x808080)
             .setTitle('Server Status Monitor')
-            .setDescription(`🔴 **Server is Offline or Unreachable**\n\n**IP:** \`${SERVER_IP}\``)
+            .setDescription(`🔴 **Server is Offline or Unreachable**\n\n**IP:** \`${Full_IP_Port}\``)
             .setTimestamp()
             .setFooter({ text: `System Powered by GlaD | Last checked: ${new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', hour12: true })}` });
 
@@ -119,11 +130,14 @@ client.login(BOT_TOKEN).catch(err => {
     process.exit(1);
 });
 
+// =========================================================
+// 🌐 خادم HTTP يستخدم المنفذ الخاص بـ Render (10000)
+// =========================================================
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('Bot is running and monitoring the server status.\n');
 });
 
-server.listen(SERVER_PORT, () => {
-    console.log(`Web server running on port ${SERVER_PORT}`);
+server.listen(RENDER_STABILITY_PORT, () => {
+    console.log(`Web server running on port ${RENDER_STABILITY_PORT}`);
 });
