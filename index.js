@@ -1,154 +1,146 @@
-// index.js (باستخدام discord.js و Bot Token)
+const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 const Gamedig = require('gamedig');
-const { Client, GatewayIntentBits } = require('discord.js');
+const http = require('http'); // مكتبة لإبقاء الخدمة تعمل في Render
 require('dotenv').config();
 
-// --- 1. المتغيرات الأساسية ---
-const SERVER_IP = process.env.SERVER_IP;
-const SERVER_PORT = process.env.SERVER_PORT;
-const BOT_TOKEN = process.env.BOT_TOKEN; // Bot Token
-const CHANNEL_ID = process.env.CHANNEL_ID; // ID القناة
-const GAME_TYPE = 'cs16'; 
-const POLLING_INTERVAL = 20000; // 20 ثانية
+// Load environment variables
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const CHANNEL_ID = process.env.CHANNEL_ID;
+const SERVER_IP = process.env.SERVER_IP; // مثال: "57.129.66.21:27015"
+// متغير بيئة جديد لتحديد الدولة
+const SERVER_COUNTRY = process.env.SERVER_COUNTRY || 'Unknown'; 
 
-// --- 2. متغيرات حالة التتبع ---
-let lastMap = null; 
-let lastServerFullStatus = false; 
-let statusMessage = null; // الكائن الذي يحمل الرسالة لتعديلها مباشرة
+if (!BOT_TOKEN || !CHANNEL_ID || !SERVER_IP) {
+    console.error("Missing environment variables (BOT_TOKEN, CHANNEL_ID, SERVER_IP)");
+    process.exit(1);
+}
 
-// --- 3. تهيئة عميل Discord ---
 const client = new Client({ 
     intents: [
         GatewayIntentBits.Guilds, 
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent
+        GatewayIntentBits.GuildMessages, 
+        GatewayIntentBits.MessageContent 
     ] 
 });
 
-// --- 4. دالة بناء حمولة الرسالة (Embed) ---
-function createStatusPayload(state, isOffline = false) {
-    const color = isOffline ? 0xFF0000 : 0x00FF00; 
-    const playerList = isOffline ? 'N/A' : (state.players.map(p => p.name || 'N/A').join('\n') || 'No players online.');
+let messageId = null; // لتخزين معرف الرسالة الواحدة التي سيتم تحديثها
 
-    const embed = {
-        color: color,
-        title: isOffline ? `🚨 Server Offline 🚨` : `🔥 ${state.name}`,
-        description: `**Connect:** steam://connect/${SERVER_IP}:${SERVER_PORT}`,
-        fields: [
-            { name: 'Status', value: isOffline ? '🔴 Offline' : '🟢 Online', inline: true },
-            { name: 'Address:Port', value: `${SERVER_IP}:${SERVER_PORT}`, inline: true },
-            { name: 'Current Map', value: isOffline ? 'N/A' : state.map, inline: true },
-            { name: 'Players', value: isOffline ? '0 / 0' : `${state.players.length} / ${state.maxplayers}`, inline: true },
-            { name: 'Player List', value: playerList, inline: false }
-        ],
-        timestamp: new Date().toISOString(),
-        footer: {
-            text: 'System Powered by GlaD | Last Update' 
-        }
+// دالة تحويل رمز الدولة إلى علم ونص
+const getCountryFlag = (countryCode) => {
+    const flags = {
+        'RO': '🇷🇴 Romania',
+        'GR': '🇬🇷 Greece', // الدولة المطلوبة
+        'US': '🇺🇸 USA',
+        'GB': '🇬🇧 UK',
+        'DE': '🇩🇪 Germany'
     };
-    
-    return {
-        embeds: [embed]
-    };
-}
+    return flags[countryCode.toUpperCase()] || '🌍 Unknown Location';
+};
 
-// --- 5. دالة الإرسال/التعديل (باستخدام Bot Client) ---
-async function sendOrEditMessage(payload) {
-    const channel = client.channels.cache.get(CHANNEL_ID);
-    if (!channel) {
-        console.error(`Channel with ID ${CHANNEL_ID} not found or inaccessible.`);
-        return;
-    }
-    
-    // الخيار أ: محاولة تعديل الرسالة الموجودة
-    if (statusMessage) {
-        try {
-            await statusMessage.edit(payload);
-            console.log("Successfully edited the status message.");
-            return;
-        } catch (error) {
-            // إذا فشل التعديل (مثلاً، حُذفت الرسالة)، نُصفر statusMessage وننتقل للإرسال
-            console.error("Failed to edit existing message. Sending new one...", error.message);
-            statusMessage = null;
-        }
-    }
-    
-    // الخيار ب: إرسال رسالة جديدة
-    try {
-        statusMessage = await channel.send(payload);
-        console.log(`Successfully sent new message. ID: ${statusMessage.id}`);
-    } catch (error) {
-        console.error("Failed to send new message. Check bot permissions.", error.message);
-    }
-}
-
-
-// --- 6. دالة المراقبة الرئيسية (المنطق الصارم) ---
 async function updateServerStatus() {
-    let currentState = null;
-    let isOffline = false;
-
-    // 6.1 الاستعلام عن السيرفر
+    console.log(`Checking server status for ${SERVER_IP}...`);
     try {
-        currentState = await Gamedig.query({
-            type: GAME_TYPE,
-            host: SERVER_IP,
-            port: SERVER_PORT
+        const [ip, port] = SERVER_IP.split(':');
+        const state = await Gamedig.query({
+            type: 'cs16', // يمكنك تغيير نوع اللعبة إذا لزم الأمر
+            host: ip,
+            port: parseInt(port)
         });
-    } catch (error) {
-        isOffline = true;
-    }
 
-    let shouldUpdate = false;
-    
-    if (!isOffline) {
-        const currentMap = currentState.map;
-        const maxPlayers = currentState.maxplayers;
-        const isCurrentlyFull = (currentState.players.length >= maxPlayers);
+        const countryInfo = getCountryFlag(SERVER_COUNTRY);
+
+        const embed = new EmbedBuilder()
+            .setColor(state.maxplayers > state.players.length ? 0x00FF00 : 0xFF0000)
+            .setTitle(state.name)
+            .setURL(`steam://connect/${SERVER_IP}`)
+            .setDescription(`**Connect:** \`steam://connect/${SERVER_IP}\``)
+            .addFields(
+                { name: 'Status', value: state.maxplayers > 0 ? '🟢 Online' : '🔴 Offline', inline: true },
+                { name: 'Country', value: countryInfo, inline: true }, // عرض الدولة
+                { name: 'Address:Port', value: `\`${SERVER_IP}\``, inline: false },
+                { name: 'Game', value: state.raw.game || 'Counter-Strike 1.6', inline: true },
+                { name: 'Current Map', value: state.map, inline: true },
+                { name: 'Players', value: `${state.players.length} / ${state.maxplayers} (${Math.round((state.players.length / state.maxplayers) * 100)}%)`, inline: false },
+            )
+            .setTimestamp()
+            .setFooter({ text: `Last Update: ${new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', hour12: true })}` });
         
-        // الشروط الصارمة للتحديث
-        const mapChanged = currentMap !== lastMap;
-        const fullStatusChanged = lastServerFullStatus !== isCurrentlyFull;
-
-        // تحديث فقط عند تغير الخريطة أو حالة الامتلاء
-        shouldUpdate = mapChanged || fullStatusChanged;
-
-        // تحديث متغيرات التتبع
-        lastMap = currentMap;
-        lastServerFullStatus = isCurrentlyFull;
-    } else {
-        // إذا كان السيرفر Offline، يجب أن نحدث الرسالة إذا كانت آخر حالة له Online
-        if (lastMap !== null) {
-            shouldUpdate = true; 
-            lastMap = null;
-            lastServerFullStatus = false;
+        // منطق تحديث الرسالة الواحدة
+        const channel = client.channels.cache.get(CHANNEL_ID);
+        if (!channel) {
+            console.error("Channel not found. Check CHANNEL_ID.");
+            return;
         }
-    }
 
-    // إرسال التحديث في حالتين:
-    // 1. إذا كان هناك تحديث مطلوب.
-    // 2. إذا لم تكن هناك رسالة موجودة لتعديلها (أول مرة تشغيل).
-    if (!shouldUpdate && statusMessage) {
-        console.log("No required state change. Skipping update.");
-        return;
+        if (messageId) {
+            try {
+                // محاولة تعديل الرسالة الموجودة
+                const message = await channel.messages.fetch(messageId);
+                await message.edit({ embeds: [embed] });
+                console.log(`Successfully edited message: ${messageId}`);
+            } catch (error) {
+                console.warn(`Could not find message ID ${messageId} or failed to edit. Sending a new message.`);
+                // إذا فشل التعديل، أرسل رسالة جديدة واحفظ معرفها
+                const newMessage = await channel.send({ embeds: [embed] });
+                messageId = newMessage.id;
+                console.log(`Sent new message and updated messageId: ${messageId}`);
+            }
+        } else {
+            // أول تشغيل، أرسل رسالة جديدة
+            const newMessage = await channel.send({ embeds: [embed] });
+            messageId = newMessage.id;
+            console.log(`Sent initial message and saved ID: ${messageId}`);
+        }
+
+    } catch (error) {
+        // إذا كان السيرفر متوقفاً
+        const embed = new EmbedBuilder()
+            .setColor(0x808080)
+            .setTitle('Server Status Monitor')
+            .setDescription(`🔴 **Server is Offline or Unreachable**\n\n**IP:** \`${SERVER_IP}\``)
+            .setTimestamp()
+            .setFooter({ text: `Last checked: ${new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', hour12: true })}` });
+
+        const channel = client.channels.cache.get(CHANNEL_ID);
+        if (channel) {
+            if (messageId) {
+                try {
+                    const message = await channel.messages.fetch(messageId);
+                    await message.edit({ embeds: [embed] });
+                    console.log(`Successfully edited message (Offline): ${messageId}`);
+                } catch (editError) {
+                    const newMessage = await channel.send({ embeds: [embed] });
+                    messageId = newMessage.id;
+                }
+            } else {
+                const newMessage = await channel.send({ embeds: [embed] });
+                messageId = newMessage.id;
+            }
+        }
+        console.error(`Error querying server ${SERVER_IP}: ${error.message}`);
     }
-    
-    const payload = createStatusPayload(currentState, isOffline);
-    await sendOrEditMessage(payload);
 }
 
-// --- 7. تشغيل البوت والجدولة ---
-client.on('ready', () => {
+client.once('ready', () => {
     console.log(`Bot logged in as ${client.user.tag}!`);
-    console.log(`Starting monitoring for ${SERVER_IP}:${SERVER_PORT}`);
-    
-    // تشغيل التحديث الأول فوراً
-    updateServerStatus(); 
-    
-    // جدولة الفحص كل 20 ثانية
-    setInterval(updateServerStatus, POLLING_INTERVAL); 
+    // تشغيل فوري ثم تكرار كل 20 ثانية
+    updateServerStatus();
+    setInterval(updateServerStatus, 20000); 
 });
 
 client.login(BOT_TOKEN).catch(err => {
-    console.error("Failed to log in to Discord. Check your BOT_TOKEN:", err.message);
+    console.error(`Failed to log in to Discord. Check your BOT_TOKEN: ${err.message}`);
+    process.exit(1);
+});
+
+// الخادم البسيط لمنع الإغلاق التلقائي في Render
+const PORT = process.env.PORT || 10000;
+
+const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Bot is running and monitoring the server status.\n');
+});
+
+server.listen(PORT, () => {
+    console.log(`Web server running on port ${PORT}`);
 });
