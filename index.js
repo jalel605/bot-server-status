@@ -9,14 +9,14 @@ const SERVER_PORT = process.env.SERVER_PORT;
 const WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL; 
 const GAME_TYPE = 'cs16'; 
 
-// ✅ التعديل هنا: التوقيت 5 دقائق (5 * 60 * 1000 = 300000 ميلي ثانية)
-const POLLING_INTERVAL = 300000; 
+// ✅ التعديل هنا: التوقيت 20 ثانية لضمان التقاط التغييرات فوراً
+const POLLING_INTERVAL = 20000; 
 
 // --- 2. متغيرات حالة التتبع ---
 let lastMap = null; 
 let lastServerFullStatus = false; 
-let lastPlayersHash = ''; 
-let lastMessageId = null; // سنستخدم هذا لتعديل الرسالة بدلاً من حذفها
+let lastPlayersHash = ''; // نحافظ عليه لتتبع الحالة ولكن لا نستخدمه للتحديث المشروط
+let lastMessageId = null; 
 
 // --- 3. دالة بناء حمولة الرسالة (Embed) ---
 function createStatusPayload(state, isOffline = false) {
@@ -50,14 +50,12 @@ async function sendUpdate(payload) {
     // الخيار أ: محاولة تعديل الرسالة الموجودة (PATCH)
     if (lastMessageId) {
         try {
-            // Webhook Edit Endpoint: [WEBHOOK_URL]/messages/[MESSAGE_ID]
             const editUrl = `${WEBHOOK_URL}/messages/${lastMessageId}`;
             await axios.patch(editUrl, payload);
             console.log(`Successfully edited message: ${lastMessageId}`);
-            return; // نخرج بنجاح، لا داعي لإرسال رسالة جديدة
+            return;
         } catch (error) {
             console.error('Failed to edit message (maybe it was deleted?). Sending a new one...');
-            // إذا فشل التعديل (مثلاً الرسالة حذفت يدوياً)، نصفر الـ ID لنرسل جديدة
             lastMessageId = null;
         }
     }
@@ -78,7 +76,7 @@ async function sendUpdate(payload) {
 }
 
 
-// --- 5. دالة المراقبة الرئيسية ---
+// --- 5. دالة المراقبة الرئيسية (المنطق الصارم) ---
 async function updateServerStatus() {
     let currentState = null;
     let isOffline = false;
@@ -94,9 +92,44 @@ async function updateServerStatus() {
         isOffline = true;
     }
 
-    // ملاحظة: مع التعديل (Edit)، نفضل التحديث دائماً حتى لو لم تتغير الحالة
-    // لكي يتحدث الوقت (Last Update) في التذييل، ولضمان دقة المعلومات كل 5 دقائق.
-    // إذا كنت تريد تقليل الطلبات أكثر، يمكنك إعادة تفعيل شروط (shouldUpdate).
+    let shouldUpdate = false;
+    
+    if (!isOffline) {
+        const currentMap = currentState.map;
+        const maxPlayers = currentState.maxplayers;
+        const isCurrentlyFull = (currentState.players.length >= maxPlayers);
+        
+        // Hash قائمة اللاعبين (نحتاجها فقط لتحديث المتغيرات الداخلية)
+        const playersHash = currentState.players.map(p => p.name).sort().join('|');
+
+        // ✅ الشروط الصارمة للتحديث
+        const mapChanged = currentMap !== lastMap;
+        const fullStatusChanged = lastServerFullStatus !== isCurrentlyFull;
+
+        // تحديث فقط عند تغير الخريطة أو حالة الامتلاء
+        shouldUpdate = mapChanged || fullStatusChanged;
+
+        // تحديث متغيرات التتبع
+        lastMap = currentMap;
+        lastServerFullStatus = isCurrentlyFull;
+        lastPlayersHash = playersHash;
+    } else {
+        // إذا كان السيرفر Offline، يجب أن نحدث الرسالة إذا كانت آخر حالة له Online
+        if (lastMap !== null) {
+            shouldUpdate = true; 
+            // تحديث متغيرات التتبع إلى Null
+            lastMap = null;
+            lastServerFullStatus = false;
+        }
+    }
+
+    // إرسال التحديث في حالتين:
+    // 1. إذا كان هناك تحديث مطلوب (تغير الخريطة أو الامتلاء).
+    // 2. إذا كانت هذه أول مرة للتشغيل (lastMessageId === null).
+    if (!shouldUpdate && lastMessageId) {
+        console.log("No required state change. Skipping update.");
+        return;
+    }
     
     const payload = createStatusPayload(currentState, isOffline);
     await sendUpdate(payload);
@@ -104,12 +137,12 @@ async function updateServerStatus() {
 
 // --- 6. التشغيل ---
 function startMonitor() {
-    console.log(`Starting System Powered by GlaD (Update every 5 mins)...`);
+    console.log(`Starting System Powered by GlaD (Strict Edit Mode)...`);
     
     // تشغيل التحديث الأول فوراً
     updateServerStatus(); 
     
-    // جدولة التحديث كل 5 دقائق
+    // جدولة الفحص كل 20 ثانية
     setInterval(updateServerStatus, POLLING_INTERVAL); 
 }
 
